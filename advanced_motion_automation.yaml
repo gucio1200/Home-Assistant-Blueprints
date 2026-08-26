@@ -163,8 +163,10 @@ variables:
   blocking_entity: !input blocking_entity
   blocking_states: !input blocking_states
   entity_target: !input entity_target
-  sunrise_offset_set: "{{ (sunrise_offset | default('') | string | trim) != '' }}"
-  sunset_offset_set: "{{ (sunset_offset | default('') | string | trim) != '' }}"
+  # True when a per-event override is present (blank/None => use shared Sun Offset)
+  sunrise_offset_set: "{{ (sunrise_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
+  sunset_offset_set: "{{ (sunset_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
+  use_shared_sun_offset: "{{ not (sunrise_offset_set | bool) and not (sunset_offset_set | bool) }}"
 
 condition:
   - condition: and
@@ -189,51 +191,21 @@ condition:
         conditions:
           - condition: template
             value_template: "{{ (sun_condition | default('none')) == 'none' }}"
-          # Day — both specific offsets blank: shared Sun Offset (legacy)
+          # Day with shared Sun Offset only (native sun condition — existing deployments)
           - condition: and
             conditions:
               - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'day' and not (sunrise_offset_set | bool) and not (sunset_offset_set | bool) }}"
+                value_template: "{{ (sun_condition | default('none')) == 'day' and (use_shared_sun_offset | bool) }}"
               - condition: sun
                 after: sunrise
                 after_offset: !input sun_offset
                 before: sunset
                 before_offset: !input sun_offset
-          # Day — sunrise override only; sunset uses shared
+          # Night with shared Sun Offset only (native sun condition — existing deployments)
           - condition: and
             conditions:
               - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'day' and (sunrise_offset_set | bool) and not (sunset_offset_set | bool) }}"
-              - condition: sun
-                after: sunrise
-                after_offset: !input sunrise_offset
-                before: sunset
-                before_offset: !input sun_offset
-          # Day — sunset override only; sunrise uses shared
-          - condition: and
-            conditions:
-              - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'day' and not (sunrise_offset_set | bool) and (sunset_offset_set | bool) }}"
-              - condition: sun
-                after: sunrise
-                after_offset: !input sun_offset
-                before: sunset
-                before_offset: !input sunset_offset
-          # Day — both overrides set
-          - condition: and
-            conditions:
-              - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'day' and (sunrise_offset_set | bool) and (sunset_offset_set | bool) }}"
-              - condition: sun
-                after: sunrise
-                after_offset: !input sunrise_offset
-                before: sunset
-                before_offset: !input sunset_offset
-          # Night — both specific offsets blank: shared Sun Offset (legacy)
-          - condition: and
-            conditions:
-              - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'night' and not (sunrise_offset_set | bool) and not (sunset_offset_set | bool) }}"
+                value_template: "{{ (sun_condition | default('none')) == 'night' and (use_shared_sun_offset | bool) }}"
               - condition: or
                 conditions:
                   - condition: sun
@@ -242,45 +214,66 @@ condition:
                   - condition: sun
                     before: sunrise
                     before_offset: !input sun_offset
-          # Night — sunrise override only; sunset uses shared
-          - condition: and
-            conditions:
-              - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'night' and (sunrise_offset_set | bool) and not (sunset_offset_set | bool) }}"
-              - condition: or
-                conditions:
-                  - condition: sun
-                    after: sunset
-                    after_offset: !input sun_offset
-                  - condition: sun
-                    before: sunrise
-                    before_offset: !input sunrise_offset
-          # Night — sunset override only; sunrise uses shared
-          - condition: and
-            conditions:
-              - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'night' and not (sunrise_offset_set | bool) and (sunset_offset_set | bool) }}"
-              - condition: or
-                conditions:
-                  - condition: sun
-                    after: sunset
-                    after_offset: !input sunset_offset
-                  - condition: sun
-                    before: sunrise
-                    before_offset: !input sun_offset
-          # Night — both overrides set
-          - condition: and
-            conditions:
-              - condition: template
-                value_template: "{{ (sun_condition | default('none')) == 'night' and (sunrise_offset_set | bool) and (sunset_offset_set | bool) }}"
-              - condition: or
-                conditions:
-                  - condition: sun
-                    after: sunset
-                    after_offset: !input sunset_offset
-                  - condition: sun
-                    before: sunrise
-                    before_offset: !input sunrise_offset
+          # Day with separate sunrise/sunset offsets (template — avoids invalid empty !input offsets)
+          - condition: template
+            value_template: >
+              {% set mode = sun_condition | default('none') %}
+              {% if mode != 'day' or (use_shared_sun_offset | bool) %}
+                {{ false }}
+              {% else %}
+                {% set shared = sun_offset | default('00:00', true) | string | trim %}
+                {% set rise_raw = sunrise_offset | default('', true) | string | trim %}
+                {% set set_raw = sunset_offset | default('', true) | string | trim %}
+                {% set rise_o = rise_raw if rise_raw not in ['', 'None', 'none'] else shared %}
+                {% set set_o = set_raw if set_raw not in ['', 'None', 'none'] else shared %}
+                {% if rise_o in ['', 'None', 'none'] %}{% set rise_o = '00:00' %}{% endif %}
+                {% if set_o in ['', 'None', 'none'] %}{% set set_o = '00:00' %}{% endif %}
+                {% set rise_neg = rise_o.startswith('-') %}
+                {% set set_neg = set_o.startswith('-') %}
+                {% set rise_body = rise_o.lstrip('-') %}
+                {% set set_body = set_o.lstrip('-') %}
+                {% if rise_body.split(':') | length == 2 %}{% set rise_body = rise_body ~ ':00' %}{% endif %}
+                {% if set_body.split(':') | length == 2 %}{% set set_body = set_body ~ ':00' %}{% endif %}
+                {% set rise_td = as_timedelta(rise_body) %}
+                {% set set_td = as_timedelta(set_body) %}
+                {% if rise_neg %}{% set rise_td = -rise_td %}{% endif %}
+                {% if set_neg %}{% set set_td = -set_td %}{% endif %}
+                {% set next_rise = state_attr('sun.sun', 'next_rising') | as_datetime | as_local %}
+                {% set next_set = state_attr('sun.sun', 'next_setting') | as_datetime | as_local %}
+                {% set today_rise = next_rise if next_rise.date() == now().date() else next_rise - timedelta(days=1) %}
+                {% set today_set = next_set if next_set.date() == now().date() else next_set - timedelta(days=1) %}
+                {{ now() >= today_rise + rise_td and now() < today_set + set_td }}
+              {% endif %}
+          # Night with separate sunrise/sunset offsets
+          - condition: template
+            value_template: >
+              {% set mode = sun_condition | default('none') %}
+              {% if mode != 'night' or (use_shared_sun_offset | bool) %}
+                {{ false }}
+              {% else %}
+                {% set shared = sun_offset | default('00:00', true) | string | trim %}
+                {% set rise_raw = sunrise_offset | default('', true) | string | trim %}
+                {% set set_raw = sunset_offset | default('', true) | string | trim %}
+                {% set rise_o = rise_raw if rise_raw not in ['', 'None', 'none'] else shared %}
+                {% set set_o = set_raw if set_raw not in ['', 'None', 'none'] else shared %}
+                {% if rise_o in ['', 'None', 'none'] %}{% set rise_o = '00:00' %}{% endif %}
+                {% if set_o in ['', 'None', 'none'] %}{% set set_o = '00:00' %}{% endif %}
+                {% set rise_neg = rise_o.startswith('-') %}
+                {% set set_neg = set_o.startswith('-') %}
+                {% set rise_body = rise_o.lstrip('-') %}
+                {% set set_body = set_o.lstrip('-') %}
+                {% if rise_body.split(':') | length == 2 %}{% set rise_body = rise_body ~ ':00' %}{% endif %}
+                {% if set_body.split(':') | length == 2 %}{% set set_body = set_body ~ ':00' %}{% endif %}
+                {% set rise_td = as_timedelta(rise_body) %}
+                {% set set_td = as_timedelta(set_body) %}
+                {% if rise_neg %}{% set rise_td = -rise_td %}{% endif %}
+                {% if set_neg %}{% set set_td = -set_td %}{% endif %}
+                {% set next_rise = state_attr('sun.sun', 'next_rising') | as_datetime | as_local %}
+                {% set next_set = state_attr('sun.sun', 'next_setting') | as_datetime | as_local %}
+                {% set today_rise = next_rise if next_rise.date() == now().date() else next_rise - timedelta(days=1) %}
+                {% set today_set = next_set if next_set.date() == now().date() else next_set - timedelta(days=1) %}
+                {{ now() >= today_set + set_td or now() < today_rise + rise_td }}
+              {% endif %}
 action:
   - choose:
       - conditions:
