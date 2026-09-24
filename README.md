@@ -60,7 +60,6 @@ You can add this blueprint to your Home Assistant instance by:
   - **Immediately** – turn it back on right away.
   - **After room clears** – keep it off until every sensor has been clear once, then react to motion normally. Good for stairs, "all off" buttons or TV scenes.
   - **Never** – leave it off.
-- **Relight When Occupied** (deprecated): kept for existing automations; turning it off forces Relight Mode to Never.
 - **Transition**: optional fade time for turning lights on and off.
 
 ## How It Works

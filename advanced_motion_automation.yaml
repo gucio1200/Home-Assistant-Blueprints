@@ -182,12 +182,6 @@ blueprint:
               label: After room clears
             - value: never
               label: Never
-    relight_when_occupied:
-      name: Relight When Occupied (Deprecated)
-      description: Kept for existing automations. Turning it off forces Relight Mode to Never.
-      default: true
-      selector:
-        boolean:
 
 mode: single
 max_exceeded: silent
@@ -229,9 +223,7 @@ trigger:
 
 variables:
   motion_sensors: !input motion_sensors
-  relight_when_occupied: !input relight_when_occupied
-  relight_mode: !input relight_mode
-  relight_effective: "{{ relight_mode if (relight_when_occupied | bool) else 'never' }}"
+  relight_effective: !input relight_mode
   set_Control: !input set_Control
   brightness: !input brightness
   color: !input color
