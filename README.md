@@ -56,6 +56,7 @@ You can add this blueprint to your Home Assistant instance by:
 - **Sun Offset**: Time offset from sunrise/sunset. Use **HH:MM** (hours:minutes), e.g. 30 minutes = `00:30`, 1 hour = `01:00`. Use a leading minus for “before” (e.g. `-01:00`). **Note:** `30:00` is interpreted as 30 *hours*, not 30 minutes.
 - **Blocking Entity**: Entity that can prevent the automation from running
 - **Blocking States**: States of the blocking entity that will prevent activation
+- **Relight When Occupied** (default: on): if a light is turned off (manually or by anything else) while any sensor still reports presence, it is turned back on right away. Turn it off for rooms where another automation or an "all off" switch is expected to keep the light off while someone is still there. Only works when lights are selected as entities (not areas/devices).
 
 ## How It Works
 
@@ -64,7 +65,7 @@ You can add this blueprint to your Home Assistant instance by:
    - **Turn On mode**: Lights turn on with optional brightness setting
    - **RGB mode**: Lights turn on with selected color and brightness
    - **Temperature mode**: Lights turn on with selected color temperature and brightness
-3. When motion stops, if **Wait Time** is greater than 0, the blueprint waits for the configured time period, then turns the lights off. If **Wait Time** is 0, the turn-off sequence is skipped and lights stay on until turned off by another automation or manually.
+3. When **all** sensors report no motion, if **Wait Time** is greater than 0, the blueprint waits for the configured time period, then turns the lights off. Any sensor detecting motion during that period restarts the countdown, even while a blocking entity prevents a new run. If **Wait Time** is 0, the turn-off sequence is skipped and lights stay on until turned off by another automation or manually.
 
 ## Advanced Functionality
 

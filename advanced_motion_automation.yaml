@@ -1,14 +1,18 @@
 blueprint:
   name: Motion-activated Light with Conditions, Exceptions, Optional Settings, and Sun Offset
   description: >
-    Turns light on when motion detected, then off after motion clears and an optional wait
-    period. Set wait time to 0 to disable automatic turn-off (on-only). Includes Turn On,
+    Turns light on when motion detected, then off once every sensor has been clear for the
+    wait period. Set wait time to 0 to disable automatic turn-off (on-only). Includes Turn On,
     RGB, or Temperature control, conditional entity check, and sun position check.
+
+    If a light is turned off (manually or otherwise) while any sensor still reports
+    presence, it is turned back on right away (can be disabled with "Relight When Occupied").
 
     Sun timing: leave Sunrise/Sunset Offset blank to use the shared Sun Offset (existing
     behavior). Set them separately for asymmetric windows — e.g. Night from 30 min before
     sunset until 30 min after sunrise: Sunset Offset -00:30, Sunrise Offset 00:30.
   domain: automation
+  source_url: https://github.com/gucio1200/Home-Assistant-Blueprints/blob/main/advanced_motion_automation.yaml
   input:
     motion_sensors:
       name: Motion and Occupancy Sensors
@@ -142,16 +146,39 @@ blueprint:
       default:
       selector:
         text:
+    relight_when_occupied:
+      name: Relight When Occupied
+      description: >
+        Turn the lights back on as soon as they are turned off while any sensor still reports
+        presence. Only works for entities selected directly (not areas or devices) in
+        Lights and Switches.
+      default: true
+      selector:
+        boolean:
 
 mode: restart
 max_exceeded: silent
+
+trigger_variables:
+  trigger_sensors: !input motion_sensors
+  trigger_target: !input entity_target
 
 trigger:
   - platform: state
     entity_id: !input motion_sensors
     to: "on"
+    id: motion
+  - platform: template
+    id: relight
+    value_template: >
+      {% set lights = trigger_target.entity_id | default([]) %}
+      {% set lights = [lights] if lights is string else lights %}
+      {{ lights | select('is_state', 'off') | list | count > 0
+         and trigger_sensors | select('is_state', 'on') | list | count > 0 }}
 
 variables:
+  motion_sensors: !input motion_sensors
+  relight_when_occupied: !input relight_when_occupied
   set_Control: !input set_Control
   no_motion_wait: !input no_motion_wait
   condition_entity: !input condition_entity
@@ -171,6 +198,14 @@ variables:
 condition:
   - condition: and
     conditions:
+      - condition: or
+        conditions:
+          - condition: not
+            conditions:
+              - condition: trigger
+                id: relight
+          - condition: template
+            value_template: "{{ relight_when_occupied | bool }}"
       - condition: or
         conditions:
           - condition: template
@@ -358,11 +393,14 @@ action:
           - condition: template
             value_template: "{{ (no_motion_wait | int(0)) > 0 }}"
         sequence:
-          - wait_for_trigger:
-              platform: state
-              entity_id: !input motion_sensors
-              to: "off"
-          - delay: !input no_motion_wait
+          - repeat:
+              sequence:
+                - wait_template: "{{ motion_sensors | select('is_state', 'on') | list | count == 0 }}"
+                - wait_template: "{{ motion_sensors | select('is_state', 'on') | list | count > 0 }}"
+                  timeout: "{{ no_motion_wait | int }}"
+                  continue_on_timeout: true
+              until:
+                - "{{ not wait.completed }}"
           - choose:
               - conditions:
                   - condition: template
