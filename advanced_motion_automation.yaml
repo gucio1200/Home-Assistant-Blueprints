@@ -8,6 +8,10 @@ blueprint:
     If a light is turned off (manually or otherwise) while any sensor still reports
     presence, it is turned back on right away (can be disabled with "Relight When Occupied").
 
+    After a Home Assistant start or an automation reload (which cancels a pending
+    turn-off), lights that are still on get the turn-off countdown again, subject to the
+    condition entity and sun checks.
+
     Sun timing: leave Sunrise/Sunset Offset blank to use the shared Sun Offset (existing
     behavior). Set them separately for asymmetric windows — e.g. Night from 30 min before
     sunset until 30 min after sunrise: Sunset Offset -00:30, Sunrise Offset 00:30.
@@ -168,6 +172,12 @@ trigger:
     entity_id: !input motion_sensors
     to: "on"
     id: motion
+  - platform: homeassistant
+    event: start
+    id: resume
+  - platform: event
+    event_type: automation_reloaded
+    id: resume
   - platform: template
     id: relight
     value_template: >
@@ -190,6 +200,9 @@ variables:
   blocking_entity: !input blocking_entity
   blocking_states: !input blocking_states
   entity_target: !input entity_target
+  target_entities: >
+    {% set lights = entity_target.entity_id | default([]) %}
+    {{ [lights] if lights is string else lights }}
   # True when a per-event override is present (blank/None => use shared Sun Offset)
   sunrise_offset_set: "{{ (sunrise_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
   sunset_offset_set: "{{ (sunset_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
@@ -208,6 +221,16 @@ condition:
             value_template: "{{ relight_when_occupied | bool }}"
       - condition: or
         conditions:
+          - condition: not
+            conditions:
+              - condition: trigger
+                id: resume
+          - condition: template
+            value_template: "{{ target_entities | select('is_state', 'on') | list | count > 0 }}"
+      - condition: or
+        conditions:
+          - condition: trigger
+            id: resume
           - condition: template
             value_template: "{{ blocking_entity == None or blocking_entity == '' }}"
           - condition: template
@@ -310,84 +333,90 @@ condition:
                 {{ now() >= today_set + set_td or now() < today_rise + rise_td }}
               {% endif %}
 action:
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ set_Control == 'RGB' }}"
-        sequence:
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: light.turn_on
-                    target: !input entity_target
-                    data:
-                      brightness: !input brightness
-                      rgb_color: !input color
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: switch.turn_on
-                    target: !input entity_target
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ set_Control == 'Turn On' }}"
-        sequence:
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: light.turn_on
-                    target: !input entity_target
-                    data:
-                      brightness: !input brightness
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: switch.turn_on
-                    target: !input entity_target
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ set_Control == 'Temperature' }}"
-        sequence:
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: light.turn_on
-                    target: !input entity_target
-                    data:
-                      brightness: !input brightness
-                      color_temp_kelvin: !input color_temperature
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: switch.turn_on
-                    target: !input entity_target
-    default:
+  - if:
+      - condition: not
+        conditions:
+          - condition: trigger
+            id: resume
+    then:
       - choose:
           - conditions:
               - condition: template
-                value_template: "{{ 'light.' in entity_target.entity_id|string }}"
+                value_template: "{{ set_Control == 'RGB' }}"
             sequence:
-              - service: light.turn_on
-                target: !input entity_target
-                data:
-                  brightness: !input brightness
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ 'light.' in entity_target.entity_id|string }}"
+                    sequence:
+                      - service: light.turn_on
+                        target: !input entity_target
+                        data:
+                          brightness: !input brightness
+                          rgb_color: !input color
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
+                    sequence:
+                      - service: switch.turn_on
+                        target: !input entity_target
+      - choose:
           - conditions:
               - condition: template
-                value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
+                value_template: "{{ set_Control == 'Turn On' }}"
             sequence:
-              - service: switch.turn_on
-                target: !input entity_target
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ 'light.' in entity_target.entity_id|string }}"
+                    sequence:
+                      - service: light.turn_on
+                        target: !input entity_target
+                        data:
+                          brightness: !input brightness
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
+                    sequence:
+                      - service: switch.turn_on
+                        target: !input entity_target
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ set_Control == 'Temperature' }}"
+            sequence:
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ 'light.' in entity_target.entity_id|string }}"
+                    sequence:
+                      - service: light.turn_on
+                        target: !input entity_target
+                        data:
+                          brightness: !input brightness
+                          color_temp_kelvin: !input color_temperature
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
+                    sequence:
+                      - service: switch.turn_on
+                        target: !input entity_target
+        default:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ 'light.' in entity_target.entity_id|string }}"
+                sequence:
+                  - service: light.turn_on
+                    target: !input entity_target
+                    data:
+                      brightness: !input brightness
+              - conditions:
+                  - condition: template
+                    value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
+                sequence:
+                  - service: switch.turn_on
+                    target: !input entity_target
   - choose:
       - conditions:
           - condition: template
