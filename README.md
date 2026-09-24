@@ -44,7 +44,7 @@ You can add this blueprint to your Home Assistant instance by:
   - **Turn On**: Simple on/off control with optional brightness
   - **RGB**: Full color control with visual color picker and brightness
   - **Temperature**: Color temperature control (Kelvin) with brightness
-- **Brightness**: Light brightness level (0-255, default: 255)
+- **Brightness**: Light brightness level (0-255). Leave empty to keep the light's current brightness.
 - **Color**: RGB color selection using visual color picker (only used in RGB mode, default: white [255, 255, 255])
 - **Color Temperature**: Kelvin temperature selection via slider (only used in Temperature mode, default: 4000K, range: 2700-6500K)
 
@@ -56,7 +56,12 @@ You can add this blueprint to your Home Assistant instance by:
 - **Sun Offset**: Time offset from sunrise/sunset. Use **HH:MM** (hours:minutes), e.g. 30 minutes = `00:30`, 1 hour = `01:00`. Use a leading minus for “before” (e.g. `-01:00`). **Note:** `30:00` is interpreted as 30 *hours*, not 30 minutes.
 - **Blocking Entity**: Entity that can prevent the automation from running
 - **Blocking States**: States of the blocking entity that will prevent activation
-- **Relight When Occupied** (default: on): if a light is turned off (manually or by anything else) while any sensor still reports presence, it is turned back on right away. Turn it off for rooms where another automation or an "all off" switch is expected to keep the light off while someone is still there. Only works when lights are selected as entities (not areas/devices).
+- **Relight Mode** (default: Immediately): what happens when a light is turned off (manually or by another automation) while any sensor still reports presence:
+  - **Immediately** – turn it back on right away.
+  - **After room clears** – keep it off until every sensor has been clear once, then react to motion normally. Good for stairs, "all off" buttons or TV scenes.
+  - **Never** – leave it off.
+- **Relight When Occupied** (deprecated): kept for existing automations; turning it off forces Relight Mode to Never.
+- **Transition**: optional fade time for turning lights on and off.
 
 ## How It Works
 
@@ -72,7 +77,8 @@ You can add this blueprint to your Home Assistant instance by:
 
 The blueprint includes several advanced features:
 
-- **Mode: restart** - Ensures the automation restarts if triggered again during execution
+- **Mode: single** - One run owns the lights from turn-on to turn-off; it tracks motion, manual switch-off and relighting itself, so new triggers while it runs are ignored and the countdown is never reset by unrelated events
+- **Lights and Switches** can be entities, areas, devices, labels or floors; areas/devices/labels/floors contribute their non-hidden light entities, switches must be listed as entities
 - **Multiple Condition Checks** - Evaluates entity states, sun position, and blocking conditions
 - **Template Conditions** - Uses templating for flexible condition evaluation
 - **Sun Position with Offset** - Allows fine-tuning of day/night detection

@@ -6,11 +6,16 @@ blueprint:
     RGB, or Temperature control, conditional entity check, and sun position check.
 
     If a light is turned off (manually or otherwise) while any sensor still reports
-    presence, it is turned back on right away (can be disabled with "Relight When Occupied").
+    presence, "Relight Mode" decides what happens: turn it back on right away, keep it off
+    until the room has been empty once, or leave it off.
 
     After a Home Assistant start or an automation reload (which cancels a pending
     turn-off), lights that are still on get the turn-off countdown again, subject to the
     condition entity and sun checks.
+
+    Lights and Switches may be given as entities, areas, devices, labels or floors. Areas,
+    devices, labels and floors contribute their (non-hidden) light entities only; add
+    switches as entities.
 
     Sun timing: leave Sunrise/Sunset Offset blank to use the shared Sun Offset (existing
     behavior). Set them separately for asymmetric windows — e.g. Night from 30 min before
@@ -59,8 +64,8 @@ blueprint:
           mode: list
     brightness:
       name: Brightness
-      description: Set the brightness level (0-255). Required for RGB & Temperature modes.
-      default: 255
+      description: Brightness level (0-255). Leave empty to keep the light's current brightness.
+      default:
       selector:
         number:
           min: 0
@@ -80,6 +85,16 @@ blueprint:
           unit: kelvin
           min: 2700
           max: 6500
+    transition:
+      name: Transition (Optional)
+      description: Seconds to fade lights on and off. Leave empty for the light's default.
+      default:
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.5
+          unit_of_measurement: seconds
     condition_entity:
       name: Condition Entity (Optional)
       description: Select an entity to check its state (optional). If no entity is defined, this condition is not evaluated.
@@ -150,22 +165,35 @@ blueprint:
       default:
       selector:
         text:
-    relight_when_occupied:
-      name: Relight When Occupied
+    relight_mode:
+      name: Relight Mode
       description: >
-        Turn the lights back on as soon as they are turned off while any sensor still reports
-        presence. Only works for entities selected directly (not areas or devices) in
-        Lights and Switches.
+        What to do when a light is turned off (manually or by another automation) while any
+        sensor still reports presence. Immediately = turn it back on. After room clears = keep
+        it off until every sensor has been clear, then react to motion again. Never = leave it
+        off.
+      default: immediate
+      selector:
+        select:
+          options:
+            - value: immediate
+              label: Immediately
+            - value: after_clear
+              label: After room clears
+            - value: never
+              label: Never
+    relight_when_occupied:
+      name: Relight When Occupied (Deprecated)
+      description: Kept for existing automations. Turning it off forces Relight Mode to Never.
       default: true
       selector:
         boolean:
 
-mode: restart
+mode: single
 max_exceeded: silent
 
 trigger_variables:
-  trigger_sensors: !input motion_sensors
-  trigger_target: !input entity_target
+  entity_target: !input entity_target
 
 trigger:
   - platform: state
@@ -181,15 +209,34 @@ trigger:
   - platform: template
     id: relight
     value_template: >
-      {% set lights = trigger_target.entity_id | default([]) %}
-      {% set lights = [lights] if lights is string else lights %}
-      {{ lights | select('is_state', 'off') | list | count > 0
-         and trigger_sensors | select('is_state', 'on') | list | count > 0 }}
+      {% set t = entity_target if entity_target is mapping else {} %}
+      {% set explicit = t.get('entity_id', []) %}
+      {% set explicit = [explicit] if explicit is string else (explicit or []) %}
+      {% set ns = namespace(e=[]) %}
+      {% for key in ['area_id', 'device_id', 'label_id', 'floor_id'] %}
+        {% set v = t.get(key, []) %}
+        {% for item in ([v] if v is string else (v or [])) %}
+          {% if key == 'area_id' %}{% set ns.e = ns.e + area_entities(item) %}
+          {% elif key == 'device_id' %}{% set ns.e = ns.e + device_entities(item) %}
+          {% elif key == 'label_id' %}{% set ns.e = ns.e + label_entities(item) %}
+          {% else %}{% for a in floor_areas(item) %}{% set ns.e = ns.e + area_entities(a) %}{% endfor %}
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+      {% set found = explicit | select('search', '^(light|switch)[.]') | list
+         + ns.e | select('search', '^light[.]') | reject('is_hidden_entity') | list %}
+      {{ found | select('is_state', 'off') | list | count > 0 }}
 
 variables:
   motion_sensors: !input motion_sensors
   relight_when_occupied: !input relight_when_occupied
+  relight_mode: !input relight_mode
+  relight_effective: "{{ relight_mode if (relight_when_occupied | bool) else 'never' }}"
   set_Control: !input set_Control
+  brightness: !input brightness
+  color: !input color
+  color_temperature: !input color_temperature
+  transition: !input transition
   no_motion_wait: !input no_motion_wait
   condition_entity: !input condition_entity
   condition_states: !input condition_states
@@ -201,8 +248,33 @@ variables:
   blocking_states: !input blocking_states
   entity_target: !input entity_target
   target_entities: >
-    {% set lights = entity_target.entity_id | default([]) %}
-    {{ [lights] if lights is string else lights }}
+    {% set t = entity_target if entity_target is mapping else {} %}
+    {% set explicit = t.get('entity_id', []) %}
+    {% set explicit = [explicit] if explicit is string else (explicit or []) %}
+    {% set ns = namespace(e=[]) %}
+    {% for key in ['area_id', 'device_id', 'label_id', 'floor_id'] %}
+      {% set v = t.get(key, []) %}
+      {% for item in ([v] if v is string else (v or [])) %}
+        {% if key == 'area_id' %}{% set ns.e = ns.e + area_entities(item) %}
+        {% elif key == 'device_id' %}{% set ns.e = ns.e + device_entities(item) %}
+        {% elif key == 'label_id' %}{% set ns.e = ns.e + label_entities(item) %}
+        {% else %}{% for a in floor_areas(item) %}{% set ns.e = ns.e + area_entities(a) %}{% endfor %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+    {% set found = explicit | select('search', '^(light|switch)[.]') | list
+       + ns.e | select('search', '^light[.]') | reject('is_hidden_entity') | list %}
+    {{ found | unique | list }}
+  light_entities: "{{ target_entities | select('search', '^light[.]') | list }}"
+  switch_entities: "{{ target_entities | select('search', '^switch[.]') | list }}"
+  light_data: >
+    {% set d = {} %}
+    {% if brightness not in [none, ''] %}{% set d = dict(d, brightness=brightness | int) %}{% endif %}
+    {% if set_Control == 'RGB' %}{% set d = dict(d, rgb_color=color) %}
+    {% elif set_Control == 'Temperature' %}{% set d = dict(d, color_temp_kelvin=color_temperature | int) %}
+    {% endif %}
+    {% if transition not in [none, ''] %}{% set d = dict(d, transition=transition | float) %}{% endif %}
+    {{ d }}
   # True when a per-event override is present (blank/None => use shared Sun Offset)
   sunrise_offset_set: "{{ (sunrise_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
   sunset_offset_set: "{{ (sunset_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
@@ -218,7 +290,9 @@ condition:
               - condition: trigger
                 id: relight
           - condition: template
-            value_template: "{{ relight_when_occupied | bool }}"
+            value_template: >
+              {{ relight_effective != 'never'
+                 and motion_sensors | select('is_state', 'on') | list | count > 0 }}
       - condition: or
         conditions:
           - condition: not
@@ -333,113 +407,112 @@ condition:
                 {{ now() >= today_set + set_td or now() < today_rise + rise_td }}
               {% endif %}
 action:
-  - if:
-      - condition: not
-        conditions:
-          - condition: trigger
-            id: resume
-    then:
-      - choose:
-          - conditions:
-              - condition: template
-                value_template: "{{ set_Control == 'RGB' }}"
-            sequence:
-              - choose:
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                    sequence:
-                      - service: light.turn_on
-                        target: !input entity_target
-                        data:
-                          brightness: !input brightness
-                          rgb_color: !input color
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                    sequence:
-                      - service: switch.turn_on
-                        target: !input entity_target
-      - choose:
-          - conditions:
-              - condition: template
-                value_template: "{{ set_Control == 'Turn On' }}"
-            sequence:
-              - choose:
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                    sequence:
-                      - service: light.turn_on
-                        target: !input entity_target
-                        data:
-                          brightness: !input brightness
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                    sequence:
-                      - service: switch.turn_on
-                        target: !input entity_target
-      - choose:
-          - conditions:
-              - condition: template
-                value_template: "{{ set_Control == 'Temperature' }}"
-            sequence:
-              - choose:
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                    sequence:
-                      - service: light.turn_on
-                        target: !input entity_target
-                        data:
-                          brightness: !input brightness
-                          color_temp_kelvin: !input color_temperature
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                    sequence:
-                      - service: switch.turn_on
-                        target: !input entity_target
-        default:
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: light.turn_on
-                    target: !input entity_target
-                    data:
-                      brightness: !input brightness
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: switch.turn_on
-                    target: !input entity_target
   - choose:
       - conditions:
+          - condition: trigger
+            id: relight
           - condition: template
-            value_template: "{{ (no_motion_wait | int(0)) > 0 }}"
+            value_template: "{{ relight_effective == 'after_clear' }}"
         sequence:
-          - repeat:
-              sequence:
-                - wait_template: "{{ motion_sensors | select('is_state', 'on') | list | count == 0 }}"
-                - wait_template: "{{ motion_sensors | select('is_state', 'on') | list | count > 0 }}"
+          - &hold_off
+            sequence:
+              - wait_template: >
+                  {{ motion_sensors | select('is_state', 'on') | list | count == 0
+                     or target_entities | select('is_state', 'off') | list | count == 0 }}
+              - if:
+                  - condition: template
+                    value_template: "{{ target_entities | select('is_state', 'off') | list | count > 0 }}"
+                then:
+                  - stop: Room cleared while the lights were kept off
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: trigger
+                id: resume
+        sequence:
+          - &turn_on
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ light_entities | count > 0 }}"
+                then:
+                  - service: light.turn_on
+                    target:
+                      entity_id: "{{ light_entities }}"
+                    data: "{{ light_data }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ switch_entities | count > 0 }}"
+                then:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "{{ switch_entities }}"
+              - wait_template: "{{ target_entities | select('is_state', 'off') | list | count == 0 }}"
+                timeout: 5
+                continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ (no_motion_wait | int(0)) > 0 }}"
+    then:
+      - repeat:
+          while:
+            - "{{ true }}"
+          sequence:
+            - wait_template: >
+                {{ motion_sensors | select('is_state', 'on') | list | count == 0
+                   or target_entities | select('is_state', 'off') | list | count > 0 }}
+            - if:
+                - condition: template
+                  value_template: >
+                    {{ target_entities | select('is_state', 'off') | list | count > 0
+                       and motion_sensors | select('is_state', 'on') | list | count > 0 }}
+              then:
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: >
+                            {{ relight_effective == 'immediate'
+                               and (blocking_entity in [none, '']
+                                    or states(blocking_entity) not in
+                                       (blocking_states or '').split(',') | map('trim') | list) }}
+                      sequence:
+                        - *turn_on
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ relight_effective == 'after_clear' }}"
+                      sequence:
+                        - *hold_off
+                  default:
+                    - stop: Lights turned off while occupied
+              else:
+                - wait_template: >
+                    {{ motion_sensors | select('is_state', 'on') | list | count > 0
+                       or target_entities | select('is_state', 'off') | list | count > 0 }}
                   timeout: "{{ no_motion_wait | int }}"
                   continue_on_timeout: true
-              until:
-                - "{{ not wait.completed }}"
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'light.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: light.turn_off
-                    target: !input entity_target
-              - conditions:
-                  - condition: template
-                    value_template: "{{ 'switch.' in entity_target.entity_id|string }}"
-                sequence:
-                  - service: switch.turn_off
-                    target: !input entity_target
+                - if:
+                    - condition: template
+                      value_template: "{{ not wait.completed }}"
+                  then:
+                    - if:
+                        - condition: template
+                          value_template: "{{ light_entities | count > 0 }}"
+                      then:
+                        - service: light.turn_off
+                          target:
+                            entity_id: "{{ light_entities }}"
+                          data: >
+                            {{ {'transition': transition | float} if transition not in [none, ''] else {} }}
+                    - if:
+                        - condition: template
+                          value_template: "{{ switch_entities | count > 0 }}"
+                      then:
+                        - service: switch.turn_off
+                          target:
+                            entity_id: "{{ switch_entities }}"
+                    - stop: No motion for the wait time
+                - if:
+                    - condition: template
+                      value_template: "{{ motion_sensors | select('is_state', 'on') | list | count == 0 }}"
+                  then:
+                    - stop: Lights turned off in an empty room
