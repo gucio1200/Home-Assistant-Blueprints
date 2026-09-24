@@ -65,7 +65,8 @@ You can add this blueprint to your Home Assistant instance by:
    - **Turn On mode**: Lights turn on with optional brightness setting
    - **RGB mode**: Lights turn on with selected color and brightness
    - **Temperature mode**: Lights turn on with selected color temperature and brightness
-3. When **all** sensors report no motion, if **Wait Time** is greater than 0, the blueprint waits for the configured time period, then turns the lights off. Any sensor detecting motion during that period restarts the countdown, even while a blocking entity prevents a new run. If **Wait Time** is 0, the turn-off sequence is skipped and lights stay on until turned off by another automation or manually.
+3. When **all** sensors report no motion, if **Wait Time** is greater than 0, the blueprint waits for the configured time period, then turns the lights off. Any sensor detecting motion during that period restarts the countdown, even while a blocking entity prevents a new run.
+4. Reloading automations (editing any automation, re-importing the blueprint) or restarting Home Assistant cancels a running countdown. The blueprint listens for Home Assistant start and `automation_reloaded` and restarts the countdown for lights that are still on, without turning anything on and without checking the blocking entity; the condition entity and sun checks still apply. If **Wait Time** is 0, the turn-off sequence is skipped and lights stay on until turned off by another automation or manually.
 
 ## Advanced Functionality
 
