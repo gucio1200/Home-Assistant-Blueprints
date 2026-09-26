@@ -110,3 +110,21 @@ If your automation isn't working as expected:
 - Verify that the selected mode (Turn On, RGB, or Temperature) matches your light's capabilities
 - For RGB mode, ensure your lights support color changes
 - For Temperature mode, ensure your lights support color temperature adjustments
+---
+
+# Air Purifier PM2.5 Curve Blueprint
+
+`air_purifier_pm25_curve.yaml` drives an air purifier from one or more PM2.5 sensors through an editable curve.
+
+## Configuration Options
+
+- **PM2.5 Sensors**: one or more sensors; unavailable or non-numeric ones are skipped.
+- **Combine Sensors**: Mean, Max, Median or Min of the readings, rounded up.
+- **Curve Points**: comma-separated `PM:percent` points, e.g. `10:15, 44:100` (equal to `percent = (PM - 4) x 2.5` between 10 and 44). Values between points are interpolated linearly; above the last point the last level is kept.
+- **Below The First Point**: Auto preset, Turn off, or Keep the first point's level.
+- **Level Control**:
+  - **Fan percentage**: standard `fan.set_percentage`.
+  - **Xiaomi MIoT favorite level**: selects the manual preset and sets the favorite level with `xiaomi_miot.set_property` (finer than purifiers whose percentage has only a few speeds). The level is `percent / 100 x Max Favorite Level`, at least 1.
+- **Window Sensor / Window Dependency Switch** (optional): the purifier turns off while the window sensor is on; with a dependency switch set, only while that switch is on as well.
+
+The automation only sends a command when the preset, level or percentage actually changes.
