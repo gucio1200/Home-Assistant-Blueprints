@@ -64,14 +64,14 @@ blueprint:
           mode: list
     brightness:
       name: Brightness
-      description: Brightness level (0-255). Leave empty to keep the light's current brightness.
-      default:
+      description: Brightness level (1-255). Set to 0 to keep the light's current brightness.
+      default: 0
       selector:
         number:
           min: 0
           max: 255
           step: 1
-          mode: box
+          mode: slider
     color:
       name: Color
       description: Set RGB color (Only used in RGB Mode)
@@ -264,7 +264,7 @@ variables:
   switch_entities: "{{ target_entities | select('search', '^switch[.]') | list }}"
   light_data: >
     {% set d = {} %}
-    {% if brightness not in [none, ''] %}{% set d = dict(d, brightness=brightness | int) %}{% endif %}
+    {% if (brightness | int(0)) > 0 %}{% set d = dict(d, brightness=brightness | int) %}{% endif %}
     {% if set_Control == 'RGB' %}{% set d = dict(d, rgb_color=color) %}
     {% elif set_Control == 'Temperature' %}{% set d = dict(d, color_temp_kelvin=color_temperature | int) %}
     {% endif %}
