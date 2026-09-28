@@ -88,15 +88,15 @@ blueprint:
           min: 2700
           max: 6500
     transition:
-      name: Transition (Optional)
-      description: Seconds to fade lights on and off. Leave empty for the light's default.
-      default:
+      name: Transition
+      description: Seconds to fade lights on and off. Set to 0 to use the light's default.
+      default: 0
       selector:
         number:
           min: 0
           max: 60
           step: 0.5
-          mode: box
+          mode: slider
           unit_of_measurement: seconds
     condition_entity:
       name: Condition Entity (Optional)
@@ -268,7 +268,7 @@ variables:
     {% if set_Control == 'RGB' %}{% set d = dict(d, rgb_color=color) %}
     {% elif set_Control == 'Temperature' %}{% set d = dict(d, color_temp_kelvin=color_temperature | int) %}
     {% endif %}
-    {% if transition not in [none, ''] %}{% set d = dict(d, transition=transition | float) %}{% endif %}
+    {% if (transition | float(0)) > 0 %}{% set d = dict(d, transition=transition | float) %}{% endif %}
     {{ d }}
   # True when a per-event override is present (blank/None => use shared Sun Offset)
   sunrise_offset_set: "{{ (sunrise_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
@@ -497,7 +497,7 @@ action:
                           target:
                             entity_id: "{{ light_entities }}"
                           data: >
-                            {{ {'transition': transition | float} if transition not in [none, ''] else {} }}
+                            {{ {'transition': transition | float} if (transition | float(0)) > 0 else {} }}
                     - if:
                         - condition: template
                           value_template: "{{ switch_entities | count > 0 }}"
