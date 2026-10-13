@@ -11,7 +11,9 @@ blueprint:
 
     After a Home Assistant start or an automation reload (which cancels a pending
     turn-off), lights that are still on get the turn-off countdown again, subject to the
-    condition entity and sun checks.
+    condition entity and sun checks. Lights whose state is not known yet at HA start
+    (Zigbee lights before Zigbee2MQTT republishes them) are waited for, up to 3 minutes;
+    motion during that wait is handled like a normal motion trigger.
 
     Lights and Switches may be given as entities, areas, devices, labels or floors. Areas,
     devices, labels and floors contribute their (non-hidden) light entities only; add
@@ -294,8 +296,10 @@ condition:
             conditions:
               - condition: trigger
                 id: resume
+          # 'unknown'/'unavailable' too: at HA start Zigbee lights have no state yet
+          # (it arrives 2-3 min later); the action waits for it before deciding.
           - condition: template
-            value_template: "{{ target_entities | select('is_state', 'on') | list | count > 0 }}"
+            value_template: "{{ target_entities | select('is_state', ['on', 'unknown', 'unavailable']) | list | count > 0 }}"
       - condition: or
         conditions:
           - condition: trigger
@@ -402,6 +406,25 @@ condition:
                 {{ now() >= today_set + set_td or now() < today_rise + rise_td }}
               {% endif %}
 action:
+  # Resume after an HA start: Zigbee lights are 'unknown' until Zigbee2MQTT republishes them,
+  # so wait (max 3 min) for real states. Motion ends the wait early: with mode single a
+  # motion trigger arriving now would be dropped, so this run handles it (see the choose below).
+  - if:
+      - condition: trigger
+        id: resume
+    then:
+      - wait_template: >
+          {{ target_entities | select('is_state', ['unknown', 'unavailable']) | list | count == 0
+             or motion_sensors | select('is_state', 'on') | list | count > 0 }}
+        timeout: 180
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: >
+              {{ target_entities | select('is_state', 'on') | list | count == 0
+                 and motion_sensors | select('is_state', 'on') | list | count == 0 }}
+        then:
+          - stop: Nothing is on after the restart
   - choose:
       - conditions:
           - condition: trigger
@@ -420,10 +443,27 @@ action:
                 then:
                   - stop: Room cleared while the lights were kept off
       - conditions:
-          - condition: not
+          - condition: or
             conditions:
-              - condition: trigger
-                id: resume
+              - condition: not
+                conditions:
+                  - condition: trigger
+                    id: resume
+              # Resume that saw motion while nothing is on: act like a motion trigger
+              # (blocking entity applies, as it does for motion).
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: resume
+                  - condition: template
+                    value_template: >
+                      {{ motion_sensors | select('is_state', 'on') | list | count > 0
+                         and target_entities | select('is_state', 'on') | list | count == 0 }}
+                  - condition: template
+                    value_template: >
+                      {{ blocking_entity in [none, '']
+                         or states(blocking_entity) not in
+                            (blocking_states or '').split(',') | map('trim') | list }}
         sequence:
           - &turn_on
             sequence:
