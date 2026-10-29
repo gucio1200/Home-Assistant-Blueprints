@@ -47,6 +47,8 @@ You can add this blueprint to your Home Assistant instance by:
 - **Brightness**: Light brightness level (0-255). Leave empty to keep the light's current brightness.
 - **Color**: RGB color selection using visual color picker (only used in RGB mode, default: white [255, 255, 255])
 - **Color Temperature**: Kelvin temperature selection via slider (only used in Temperature mode, default: 4000K, range: 2700-6500K)
+- **Hold Sensors**: sensors that keep the lights on while they report presence but never turn them on, e.g. the hall sensors for a stairs light.
+- **Arrival Sensors**: door contacts that turn the lights on as soon as the door opens into an empty room (every motion and hold sensor clear), ahead of the motion sensors. They do not keep the lights on; without motion the lights go off after the wait time.
 
 ### Conditional Controls
 
@@ -56,6 +58,7 @@ You can add this blueprint to your Home Assistant instance by:
 - **Sun Offset**: Time offset from sunrise/sunset. Use **HH:MM** (hours:minutes), e.g. 30 minutes = `00:30`, 1 hour = `01:00`. Use a leading minus for “before” (e.g. `-01:00`). **Note:** `30:00` is interpreted as 30 *hours*, not 30 minutes.
 - **Blocking Entity**: Entity that can prevent the automation from running
 - **Blocking States**: States of the blocking entity that will prevent activation
+- **Blocking Minimum Duration** (default: 0): the blocking entity only blocks once it has been in a blocking state for this many seconds. Use a few seconds when two automations share a sensor and block each other's lights, so a light that the same motion switched on a moment earlier does not block this one.
 - **Relight Mode** (default: Immediately): what happens when a light is turned off (manually or by another automation) while any sensor still reports presence:
   - **Immediately** – turn it back on right away.
   - **After room clears** – keep it off until every sensor has been clear once, then react to motion normally. Good for stairs, "all off" buttons or TV scenes.
@@ -64,12 +67,12 @@ You can add this blueprint to your Home Assistant instance by:
 
 ## How It Works
 
-1. When motion is detected, the blueprint checks all configured conditions (entity states, sun position, blocking entities)
+1. When motion is detected, or an arrival sensor opens while every motion and hold sensor is clear, the blueprint checks all configured conditions (entity states, sun position, blocking entities)
 2. If conditions are met, lights turn on based on the selected mode:
    - **Turn On mode**: Lights turn on with optional brightness setting
    - **RGB mode**: Lights turn on with selected color and brightness
    - **Temperature mode**: Lights turn on with selected color temperature and brightness
-3. When **all** sensors report no motion, if **Wait Time** is greater than 0, the blueprint waits for the configured time period, then turns the lights off. Any sensor detecting motion during that period restarts the countdown, even while a blocking entity prevents a new run.
+3. When **all** motion and hold sensors report no motion, if **Wait Time** is greater than 0, the blueprint waits for the configured time period, then turns the lights off. Any sensor detecting motion during that period restarts the countdown, even while a blocking entity prevents a new run.
 4. Reloading automations (editing any automation, re-importing the blueprint) or restarting Home Assistant cancels a running countdown. The blueprint listens for Home Assistant start and `automation_reloaded` and restarts the countdown for lights that are still on, without turning anything on and without checking the blocking entity; the condition entity and sun checks still apply. Right after a Home Assistant start, lights from integrations that publish their state late (e.g. Zigbee lights before Zigbee2MQTT republishes them) are still `unknown`/`unavailable`; the blueprint waits up to 3 minutes for their real state and then restarts the countdown only if something is actually on. Motion ends that wait early and is handled like a normal motion trigger (with `mode: single` the motion trigger itself would be dropped while the resume run is waiting). If **Wait Time** is 0, the turn-off sequence is skipped and lights stay on until turned off by another automation or manually.
 
 ## Advanced Functionality

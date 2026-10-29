@@ -9,6 +9,12 @@ blueprint:
     presence, "Relight Mode" decides what happens: turn it back on right away, keep it off
     until the room has been empty once, or leave it off.
 
+    Hold Sensors keep the lights on while they report presence but never turn them on.
+    Arrival Sensors (door contacts) turn the lights on the moment a door opens into an
+    empty room, before any motion sensor reacts. Blocking Minimum Duration makes the
+    blocking entity count only once it has been in a blocking state for that long, so a
+    light that the same motion switched on a moment earlier does not block this one.
+
     After a Home Assistant start or an automation reload (which cancels a pending
     turn-off), lights that are still on get the turn-off countdown again, subject to the
     condition entity and sun checks. Lights whose state is not known yet at HA start
@@ -34,6 +40,37 @@ blueprint:
           device_class:
             - motion
             - occupancy
+          multiple: true
+    hold_sensors:
+      name: Hold Sensors (Optional)
+      description: >
+        Sensors that keep the lights on while they report presence but never turn them on.
+        E.g. the hall sensors for a stairs light: once someone came down with the stairs
+        light on, it stays on while they are still in the hall.
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class:
+            - motion
+            - occupancy
+            - presence
+          multiple: true
+    arrival_sensors:
+      name: Arrival Sensors (Optional)
+      description: >
+        Door contacts that turn the lights on the moment they open, but only while every
+        motion and hold sensor is clear (someone arriving, not leaving). They do not keep
+        the lights on: if no motion follows, the lights go off after the wait time.
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class:
+            - door
+            - garage_door
+            - opening
+            - window
           multiple: true
     entity_target:
       name: Lights and Switches
@@ -170,6 +207,21 @@ blueprint:
       default:
       selector:
         text:
+    blocking_min_duration:
+      name: Blocking Minimum Duration
+      description: >
+        Seconds the blocking entity must already have been in a blocking state before it
+        blocks. 0 = block at once. A few seconds keep a light that the same motion switched
+        on a moment earlier (e.g. through a sensor shared by two automations) from blocking
+        this one.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+          mode: slider
+          unit_of_measurement: seconds
     relight_mode:
       name: Relight Mode
       description: >
@@ -199,6 +251,11 @@ trigger:
     entity_id: !input motion_sensors
     to: "on"
     id: motion
+  - platform: state
+    entity_id: !input arrival_sensors
+    from: "off"
+    to: "on"
+    id: arrival
   - platform: homeassistant
     event: start
     id: resume
@@ -228,6 +285,10 @@ trigger:
 
 variables:
   motion_sensors: !input motion_sensors
+  hold_sensors: !input hold_sensors
+  presence_sensors: >
+    {% set hold = [hold_sensors] if hold_sensors is string else (hold_sensors or []) %}
+    {{ (motion_sensors + hold) | unique | list }}
   relight_effective: !input relight_mode
   set_Control: !input set_Control
   brightness: !input brightness
@@ -243,6 +304,8 @@ variables:
   sunset_offset: !input sunset_offset
   blocking_entity: !input blocking_entity
   blocking_states: !input blocking_states
+  blocking_states_list: "{{ (blocking_states or '').split(',') | map('trim') | list }}"
+  blocking_min_duration: !input blocking_min_duration
   entity_target: !input entity_target
   target_entities: >
     {% set t = entity_target if entity_target is mapping else {} %}
@@ -295,6 +358,14 @@ condition:
           - condition: not
             conditions:
               - condition: trigger
+                id: arrival
+          - condition: template
+            value_template: "{{ presence_sensors | select('is_state', 'on') | list | count == 0 }}"
+      - condition: or
+        conditions:
+          - condition: not
+            conditions:
+              - condition: trigger
                 id: resume
           # 'unknown'/'unavailable' too: at HA start Zigbee lights have no state yet
           # (it arrives 2-3 min later); the action waits for it before deciding.
@@ -305,11 +376,10 @@ condition:
           - condition: trigger
             id: resume
           - condition: template
-            value_template: "{{ blocking_entity == None or blocking_entity == '' }}"
-          - condition: template
-            value_template: >
-              {% set blocking_states_list = blocking_states.split(',') | map('trim') | list %}
-              {{ states(blocking_entity) not in blocking_states_list }}
+            value_template: &not_blocked >
+              {% set b = states[blocking_entity] if blocking_entity else none %}
+              {{ b is none or b.state not in blocking_states_list
+                 or (now() - b.last_changed).total_seconds() < blocking_min_duration | float(0) }}
       - condition: or
         conditions:
           - condition: template
@@ -435,7 +505,7 @@ action:
           - &hold_off
             sequence:
               - wait_template: >
-                  {{ motion_sensors | select('is_state', 'on') | list | count == 0
+                  {{ presence_sensors | select('is_state', 'on') | list | count == 0
                      or target_entities | select('is_state', 'off') | list | count == 0 }}
               - if:
                   - condition: template
@@ -460,10 +530,7 @@ action:
                       {{ motion_sensors | select('is_state', 'on') | list | count > 0
                          and target_entities | select('is_state', 'on') | list | count == 0 }}
                   - condition: template
-                    value_template: >
-                      {{ blocking_entity in [none, '']
-                         or states(blocking_entity) not in
-                            (blocking_states or '').split(',') | map('trim') | list }}
+                    value_template: *not_blocked
         sequence:
           - &turn_on
             sequence:
@@ -494,22 +561,20 @@ action:
             - "{{ true }}"
           sequence:
             - wait_template: >
-                {{ motion_sensors | select('is_state', 'on') | list | count == 0
+                {{ presence_sensors | select('is_state', 'on') | list | count == 0
                    or target_entities | select('is_state', 'off') | list | count > 0 }}
             - if:
                 - condition: template
                   value_template: >
                     {{ target_entities | select('is_state', 'off') | list | count > 0
-                       and motion_sensors | select('is_state', 'on') | list | count > 0 }}
+                       and presence_sensors | select('is_state', 'on') | list | count > 0 }}
               then:
                 - choose:
                     - conditions:
                         - condition: template
-                          value_template: >
-                            {{ relight_effective == 'immediate'
-                               and (blocking_entity in [none, '']
-                                    or states(blocking_entity) not in
-                                       (blocking_states or '').split(',') | map('trim') | list) }}
+                          value_template: "{{ relight_effective == 'immediate' }}"
+                        - condition: template
+                          value_template: *not_blocked
                       sequence:
                         - *turn_on
                     - conditions:
@@ -521,7 +586,7 @@ action:
                     - stop: Lights turned off while occupied
               else:
                 - wait_template: >
-                    {{ motion_sensors | select('is_state', 'on') | list | count > 0
+                    {{ presence_sensors | select('is_state', 'on') | list | count > 0
                        or target_entities | select('is_state', 'off') | list | count > 0 }}
                   timeout: "{{ no_motion_wait | int }}"
                   continue_on_timeout: true
@@ -548,6 +613,6 @@ action:
                     - stop: No motion for the wait time
                 - if:
                     - condition: template
-                      value_template: "{{ motion_sensors | select('is_state', 'on') | list | count == 0 }}"
+                      value_template: "{{ presence_sensors | select('is_state', 'on') | list | count == 0 }}"
                   then:
                     - stop: Lights turned off in an empty room
