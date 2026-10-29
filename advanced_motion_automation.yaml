@@ -10,8 +10,9 @@ blueprint:
     until the room has been empty once, or leave it off.
 
     Hold Sensors keep the lights on while they report presence but never turn them on.
-    Arrival Sensors (door contacts) turn the lights on the moment a door opens into an
-    empty room, before any motion sensor reacts. Blocking Minimum Duration makes the
+    Door Sensors turn the lights on the moment a door opens, whether someone is arriving or
+    leaving, before any motion sensor reacts and regardless of the blocking entity.
+    Blocking Minimum Duration makes the
     blocking entity count only once it has been in a blocking state for that long, so a
     light that the same motion switched on a moment earlier does not block this one.
 
@@ -56,12 +57,13 @@ blueprint:
             - occupancy
             - presence
           multiple: true
-    arrival_sensors:
-      name: Arrival Sensors (Optional)
+    door_sensors:
+      name: Door Sensors (Optional)
       description: >
-        Door contacts that turn the lights on the moment they open, but only while every
-        motion and hold sensor is clear (someone arriving, not leaving). They do not keep
-        the lights on: if no motion follows, the lights go off after the wait time.
+        Door contacts that turn the lights on the moment they open, whether someone is
+        arriving or leaving, ahead of the motion sensors and regardless of the blocking
+        entity. They do not keep the lights on: once nobody is detected, the lights go off
+        after the wait time.
       default: []
       selector:
         entity:
@@ -252,10 +254,10 @@ trigger:
     to: "on"
     id: motion
   - platform: state
-    entity_id: !input arrival_sensors
+    entity_id: !input door_sensors
     from: "off"
     to: "on"
-    id: arrival
+    id: door
   - platform: homeassistant
     event: start
     id: resume
@@ -358,14 +360,6 @@ condition:
           - condition: not
             conditions:
               - condition: trigger
-                id: arrival
-          - condition: template
-            value_template: "{{ presence_sensors | select('is_state', 'on') | list | count == 0 }}"
-      - condition: or
-        conditions:
-          - condition: not
-            conditions:
-              - condition: trigger
                 id: resume
           # 'unknown'/'unavailable' too: at HA start Zigbee lights have no state yet
           # (it arrives 2-3 min later); the action waits for it before deciding.
@@ -374,7 +368,9 @@ condition:
       - condition: or
         conditions:
           - condition: trigger
-            id: resume
+            id:
+              - resume
+              - door
           - condition: template
             value_template: &not_blocked >
               {% set b = states[blocking_entity] if blocking_entity else none %}

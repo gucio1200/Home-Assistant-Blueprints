@@ -48,7 +48,7 @@ You can add this blueprint to your Home Assistant instance by:
 - **Color**: RGB color selection using visual color picker (only used in RGB mode, default: white [255, 255, 255])
 - **Color Temperature**: Kelvin temperature selection via slider (only used in Temperature mode, default: 4000K, range: 2700-6500K)
 - **Hold Sensors**: sensors that keep the lights on while they report presence but never turn them on, e.g. the hall sensors for a stairs light.
-- **Arrival Sensors**: door contacts that turn the lights on as soon as the door opens into an empty room (every motion and hold sensor clear), ahead of the motion sensors. They do not keep the lights on; without motion the lights go off after the wait time.
+- **Door Sensors**: door contacts that turn the lights on as soon as the door opens, whether someone is arriving or leaving, ahead of the motion sensors and regardless of the blocking entity (the condition entity and sun checks still apply). They do not keep the lights on; once nobody is detected, the lights go off after the wait time.
 
 ### Conditional Controls
 
@@ -67,7 +67,7 @@ You can add this blueprint to your Home Assistant instance by:
 
 ## How It Works
 
-1. When motion is detected, or an arrival sensor opens while every motion and hold sensor is clear, the blueprint checks all configured conditions (entity states, sun position, blocking entities)
+1. When motion is detected or a door sensor opens, the blueprint checks all configured conditions (entity states, sun position, blocking entities; door openings skip the blocking entity)
 2. If conditions are met, lights turn on based on the selected mode:
    - **Turn On mode**: Lights turn on with optional brightness setting
    - **RGB mode**: Lights turn on with selected color and brightness
