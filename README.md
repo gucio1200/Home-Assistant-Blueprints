@@ -54,6 +54,8 @@ You can add this blueprint to your Home Assistant instance by:
 
 - **Condition Entity**: Optional entity whose state will be checked before activating lights
 - **Allowed States**: Comma-separated list of states for the condition entity
+- **Light Level Threshold** (default: 0 = off, in lx): lights turn on only while the room is darker than this, and they also turn on when the room gets this dark while a motion sensor reports presence (someone sitting in the room at dusk). The room level is the average of the **Illuminance Sensors** or, when none are given, of the device illuminance sensors (entity ID containing `illuminance` or `lux`) in the automation's area, or in the lights' areas when the automation has no area, so a new sensor in the room is picked up on its own. Readings older than 24 hours are skipped, and without any reading the light level does not block. Lights that are already on are taken over regardless of the level. Within a minute after the lights went off the room still counts as dark for motion (sensors lag behind the lamp), and the dark trigger waits that minute, so switching a light off by hand does not bring it straight back.
+- **Illuminance Sensors** (optional): sensors to average instead of the automatic ones.
 - **Sun Condition**: Option to activate only during day, night, or regardless of sun position
 - **Sun Offset**: Time offset from sunrise/sunset. Use **HH:MM** (hours:minutes), e.g. 30 minutes = `00:30`, 1 hour = `01:00`. Use a leading minus for “before” (e.g. `-01:00`). **Note:** `30:00` is interpreted as 30 *hours*, not 30 minutes.
 - **Blocking Entity**: Entity that can prevent the automation from running
@@ -67,7 +69,7 @@ You can add this blueprint to your Home Assistant instance by:
 
 ## How It Works
 
-1. When motion is detected or a door sensor opens, the blueprint checks all configured conditions (entity states, sun position, blocking entities; door openings skip the blocking entity)
+1. When motion is detected, a door sensor opens, or the room gets darker than the Light Level Threshold while someone is present, the blueprint checks all configured conditions (entity states, sun position, light level, blocking entities; door openings skip the blocking entity)
 2. If conditions are met, lights turn on based on the selected mode:
    - **Turn On mode**: Lights turn on with optional brightness setting
    - **RGB mode**: Lights turn on with selected color and brightness
