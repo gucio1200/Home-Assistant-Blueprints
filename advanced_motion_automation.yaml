@@ -16,6 +16,11 @@ blueprint:
     blocking entity count only once it has been in a blocking state for that long, so a
     light that the same motion switched on a moment earlier does not block this one.
 
+    Light Level Threshold: the lights turn on only while the room is darker than the
+    threshold, and they also turn on when the room gets that dark while someone is
+    present. The room level is the average of the illuminance sensors in the automation's
+    area (in the lights' areas when the automation has no area), or of the sensors given.
+
     After a Home Assistant start or an automation reload (which cancels a pending
     turn-off), lights that are still on get the turn-off countdown again, subject to the
     condition entity and sun checks. Lights whose state is not known yet at HA start
@@ -151,6 +156,34 @@ blueprint:
       default:
       selector:
         text:
+    illuminance_threshold:
+      name: Light Level Threshold (Optional)
+      description: >
+        Lights turn on only while the room is darker than this, and they also turn on when
+        the room gets this dark while a motion sensor reports presence. 0 = ignore the light
+        level. The room level is the average of the Illuminance Sensors or, when none are
+        given, of the device illuminance sensors (entity ID containing "illuminance" or
+        "lux") in this automation's area, or in the lights' areas when the automation has
+        no area. Readings older than 24 hours are skipped; without any reading the light
+        level does not block. Within a minute after the lights went off the room still
+        counts as dark for motion, because sensors lag behind the lamp going off.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 2000
+          step: 1
+          mode: box
+          unit_of_measurement: lx
+    illuminance_sensors:
+      name: Illuminance Sensors (Optional)
+      description: Sensors to average instead of the ones found in the area. Leave empty to find them automatically.
+      default: []
+      selector:
+        entity:
+          domain: sensor
+          device_class: illuminance
+          multiple: true
     sun_condition:
       name: Sun Condition (Optional)
       description: >
@@ -247,6 +280,9 @@ max_exceeded: silent
 
 trigger_variables:
   entity_target: !input entity_target
+  motion_sensors: !input motion_sensors
+  illuminance_threshold: !input illuminance_threshold
+  illuminance_sensors: !input illuminance_sensors
 
 trigger:
   - platform: state
@@ -284,6 +320,46 @@ trigger:
       {% set found = explicit | select('search', '^(light|switch)[.]') | list
          + ns.e | select('search', '^light[.]') | reject('is_hidden_entity') | list %}
       {{ found | select('is_state', 'off') | list | count > 0 }}
+  - platform: template
+    id: dark
+    value_template: &light_level >
+      {% set ns = namespace(s=[], v=[]) %}
+      {% set given = [illuminance_sensors] if illuminance_sensors is string else (illuminance_sensors or []) %}
+      {% if given %}
+        {% set ns.s = given %}
+      {% else %}
+        {% set me = this.entity_id if this else none %}
+        {% set areas = [area_id(me)] if me and area_id(me) else [] %}
+        {% if not areas %}
+          {% set t = entity_target if entity_target is mapping else {} %}
+          {% set ids = t.get('entity_id', []) %}
+          {% set ids = [ids] if ids is string else (ids or []) %}
+          {% set aids = t.get('area_id', []) %}
+          {% set aids = [aids] if aids is string else (aids or []) %}
+          {% set areas = (aids + ids | map('area_id') | reject('none') | list) | unique | list %}
+        {% endif %}
+        {% for a in areas %}
+          {% for e in area_entities(a) | select('match', 'sensor[.]') | select('search', 'illuminance|lux') %}
+            {% if device_id(e) and is_state_attr(e, 'device_class', 'illuminance') %}
+              {% set ns.s = ns.s + [e] %}
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+      {% endif %}
+      {% for e in ns.s | unique %}
+        {% set s = states[e] %}
+        {% if s is not none and is_number(s.state) and (now() - s.last_reported).total_seconds() < 86400 %}
+          {% set ns.v = ns.v + [s.state | float] %}
+        {% endif %}
+      {% endfor %}
+      {% set lux = (ns.v | average) if ns.v else none %}
+      {% if light_level_value is defined %}
+        {{ none if lux is none else lux | round(1) }}
+      {% else %}
+        {{ illuminance_threshold | float(0) > 0 and lux is not none
+           and lux < illuminance_threshold | float(0)
+           and motion_sensors | select('is_state', 'on') | list | count > 0 }}
+      {% endif %}
 
 variables:
   motion_sensors: !input motion_sensors
@@ -341,6 +417,16 @@ variables:
   sunrise_offset_set: "{{ (sunrise_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
   sunset_offset_set: "{{ (sunset_offset | default('', true) | string | trim) not in ['', 'None', 'none'] }}"
   use_shared_sun_offset: "{{ not (sunrise_offset_set | bool) and not (sunset_offset_set | bool) }}"
+  illuminance_threshold: !input illuminance_threshold
+  illuminance_sensors: !input illuminance_sensors
+  light_level_value: true
+  room_lux: *light_level
+  lights_just_off: >
+    {% set ns = namespace(n=0) %}
+    {% for e in target_entities if is_state(e, 'off') and (now() - states[e].last_changed).total_seconds() < 60 %}
+      {% set ns.n = ns.n + 1 %}
+    {% endfor %}
+    {{ ns.n > 0 }}
 
 condition:
   - condition: and
@@ -471,6 +557,23 @@ condition:
                 {% set today_set = next_set if next_set.date() == now().date() else next_set - timedelta(days=1) %}
                 {{ now() >= today_set + set_td or now() < today_rise + rise_td }}
               {% endif %}
+      - condition: or
+        conditions:
+          - condition: trigger
+            id:
+              - resume
+              - relight
+          - condition: template
+            value_template: &light_ok >
+              {% set limit = illuminance_threshold | float(0) %}
+              {% if limit <= 0 or room_lux is none
+                    or target_entities | select('is_state', 'on') | list | count > 0 %}
+                {{ true }}
+              {% elif trigger.id == 'dark' %}
+                {{ room_lux < limit and not lights_just_off }}
+              {% else %}
+                {{ room_lux < limit or lights_just_off }}
+              {% endif %}
 action:
   # Resume after an HA start: Zigbee lights are 'unknown' until Zigbee2MQTT republishes them,
   # so wait (max 3 min) for real states. Motion ends the wait early: with mode single a
@@ -527,6 +630,8 @@ action:
                          and target_entities | select('is_state', 'on') | list | count == 0 }}
                   - condition: template
                     value_template: *not_blocked
+                  - condition: template
+                    value_template: *light_ok
         sequence:
           - &turn_on
             sequence:
