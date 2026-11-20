@@ -61,6 +61,7 @@ You can add this blueprint to your Home Assistant instance by:
 - **Blocking Entity**: Entity that can prevent the automation from running
 - **Blocking States**: States of the blocking entity that will prevent activation
 - **Blocking Minimum Duration** (default: 0): the blocking entity only blocks once it has been in a blocking state for this many seconds. Use a few seconds when two automations share a sensor and block each other's lights, so a light that the same motion switched on a moment earlier does not block this one.
+- **Resume When Unblocked** (default: off): when the blocking entity leaves its blocking states while a sensor still reports presence, the lights turn on at once instead of at the next motion (not within a minute after the lights went off, and only while the room is darker than the Light Level Threshold). A light switched off while the blocking entity is blocking ends the run instead of waiting for the room to clear, so the automation is ready the moment the block is lifted.
 - **Relight Mode** (default: Immediately): what happens when a light is turned off (manually or by another automation) while any sensor still reports presence:
   - **Immediately** – turn it back on right away.
   - **After room clears** – keep it off until every sensor has been clear once, then react to motion normally. Good for stairs, "all off" buttons or TV scenes.
